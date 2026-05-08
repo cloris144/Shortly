@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useTheme } from './hooks/useTheme';
 import { AnimatePresence } from 'framer-motion';
+import { useTheme } from './hooks/useTheme';
+import { useWebSocket } from './hooks/useWebSocket';
 import Header from './components/Header';
 import CreateInput from './components/CreateInput';
 import StatsBar from './components/StatsBar';
@@ -17,31 +18,55 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [newLinkId, setNewLinkId] = useState(null);
   const [clickTarget, setClickTarget] = useState(null);
+  const [lastWsMsg, setLastWsMsg] = useState(null);
   const { mode, setMode } = useTheme();
   const toastId = useRef(0);
 
   const addToast = useCallback((message, type = 'success') => {
     const id = ++toastId.current;
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3500);
   }, []);
 
-  const loadLinks = useCallback(async () => {
-    try {
-      const data = await fetchLinks();
-      setLinks(data);
-    } catch {
-      addToast('Failed to load links. Please refresh.', 'error');
-    } finally {
-      setLoading(false);
-    }
+  // Load initial data
+  useEffect(() => {
+    fetchLinks()
+      .then(setLinks)
+      .catch(() => addToast('Failed to load links. Please refresh.', 'error'))
+      .finally(() => setLoading(false));
   }, [addToast]);
 
-  useEffect(() => { loadLinks(); }, [loadLinks]);
+  // WebSocket live sync
+  const wsStatus = useWebSocket(useCallback((msg) => {
+    setLastWsMsg(msg);
+    switch (msg.type) {
+      case 'link:created':
+        // Deduplicate: our own create already updated state via API response
+        setLinks(prev => prev.some(l => l.id === msg.data.id) ? prev : [msg.data, ...prev]);
+        break;
+      case 'link:updated':
+        setLinks(prev => prev.map(l => l.id === msg.data.id ? msg.data : l));
+        break;
+      case 'link:deleted':
+        setLinks(prev => prev.filter(l => l.id !== msg.data.id));
+        // Close drawer if deleted link was open
+        setClickTarget(prev => prev?.id === msg.data.id ? null : prev);
+        break;
+      case 'link:clicked':
+        setLinks(prev => prev.map(l =>
+          l.id === msg.data.id
+            ? { ...l, clickCount: msg.data.clickCount, updatedAt: msg.data.updatedAt }
+            : l
+        ));
+        break;
+    }
+  }, []));
+
+  // ── CRUD handlers ───────────────────────────────────────────────────────────
 
   const handleCreate = async (originalUrl) => {
     const newLink = await createLink(originalUrl);
-    setLinks((prev) => [newLink, ...prev]);
+    setLinks(prev => [newLink, ...prev]);
     setNewLinkId(newLink.id);
     setTimeout(() => setNewLinkId(null), 3000);
     addToast('Short URL created successfully!', 'success');
@@ -49,7 +74,7 @@ export default function App() {
 
   const handleUpdate = async (id, originalUrl) => {
     const updated = await updateLink(id, originalUrl);
-    setLinks((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    setLinks(prev => prev.map(l => l.id === id ? updated : l));
     addToast('Link updated.', 'success');
     return updated;
   };
@@ -60,7 +85,7 @@ export default function App() {
     setDeleteTarget(null);
     try {
       await deleteLink(target.id);
-      setLinks((prev) => prev.filter((l) => l.id !== target.id));
+      setLinks(prev => prev.filter(l => l.id !== target.id));
       addToast('Link deleted.', 'success');
     } catch {
       addToast('Could not delete the link.', 'error');
@@ -75,7 +100,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <Header mode={mode} setMode={setMode} />
+      <Header mode={mode} setMode={setMode} wsStatus={wsStatus} />
 
       <main className="main">
         <CreateInput onCreate={handleCreate} />
@@ -104,6 +129,7 @@ export default function App() {
           <ClickDrawer
             key="click-drawer"
             link={clickTarget}
+            lastWsMsg={lastWsMsg}
             onClose={() => setClickTarget(null)}
           />
         )}
@@ -111,7 +137,7 @@ export default function App() {
 
       <div className="toast-container">
         <AnimatePresence mode="popLayout">
-          {toasts.map((toast) => (
+          {toasts.map(toast => (
             <Toast key={toast.id} toast={toast} />
           ))}
         </AnimatePresence>

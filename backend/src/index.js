@@ -1,35 +1,60 @@
 require('dotenv').config();
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
+const { WebSocketServer, OPEN } = require('ws');
 const { pool, initDb } = require('./db');
-const linksRouter = require('./routes/links');
+const createLinksRouter = require('./routes/links');
 const { parseUserAgent } = require('./utils/parseUserAgent');
 
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 4000;
+
+// ── WebSocket server ──────────────────────────────────────────────────────────
+
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+function broadcast(data) {
+  const message = JSON.stringify(data);
+  wss.clients.forEach(client => {
+    if (client.readyState === OPEN) client.send(message);
+  });
+}
+
+wss.on('connection', (ws) => {
+  ws.on('error', () => ws.terminate());
+});
+
+// ── Express middleware ────────────────────────────────────────────────────────
 
 app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json());
 
-app.use('/api/links', linksRouter);
+app.use('/api/links', createLinksRouter(broadcast));
+
+// ── Short code redirect ───────────────────────────────────────────────────────
 
 app.get('/:shortCode', async (req, res) => {
   const { shortCode } = req.params;
-
   if (shortCode === 'favicon.ico') return res.status(404).end();
 
   try {
     const result = await pool.query(
-      'UPDATE short_links SET click_count = click_count + 1, updated_at = NOW() WHERE short_code = $1 RETURNING id, original_url',
+      `UPDATE short_links
+       SET click_count = click_count + 1, updated_at = NOW()
+       WHERE short_code = $1
+       RETURNING id, original_url, click_count, updated_at`,
       [shortCode]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).send(notFoundPage());
-    }
+    if (result.rows.length === 0) return res.status(404).send(notFoundPage());
 
-    const { id: linkId, original_url } = result.rows[0];
+    const { id: linkId, original_url, click_count, updated_at } = result.rows[0];
+
+    // Broadcast click update to all dashboard viewers
+    broadcast({ type: 'link:clicked', data: { id: linkId, clickCount: click_count, updatedAt: updated_at } });
 
     // Log click details (non-blocking)
     const ua = req.get('user-agent') || '';
@@ -41,7 +66,18 @@ app.get('/:shortCode', async (req, res) => {
       `INSERT INTO click_logs (link_id, ip, user_agent, browser, browser_version, os, device_type, referer)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [linkId, ip, ua, browser, browserVersion, os, deviceType, referer]
-    ).catch(err => console.error('click_log insert failed:', err.message));
+    ).then(() => {
+      // Broadcast new click log entry so open drawers update live
+      broadcast({
+        type: 'click:logged',
+        data: {
+          linkId,
+          ip, browser, browserVersion, os, deviceType, referer,
+          userAgent: ua,
+          clickedAt: new Date().toISOString(),
+        },
+      });
+    }).catch(err => console.error('click_log insert failed:', err.message));
 
     res.redirect(302, original_url);
   } catch (err) {
@@ -49,6 +85,8 @@ app.get('/:shortCode', async (req, res) => {
     res.status(500).send('Something went wrong.');
   }
 });
+
+// ── 404 page ──────────────────────────────────────────────────────────────────
 
 function notFoundPage() {
   return `<!DOCTYPE html>
@@ -62,25 +100,17 @@ function notFoundPage() {
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
       background: #f8faff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      color: #0f172a;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; color: #0f172a;
     }
     .container { text-align: center; padding: 2rem; }
     .code { font-size: 5rem; font-weight: 700; color: #e2e8f0; line-height: 1; }
     h1 { font-size: 1.5rem; font-weight: 600; margin: 1rem 0 0.5rem; }
     p { color: #64748b; margin-bottom: 2rem; }
     a {
-      display: inline-block;
-      padding: 0.625rem 1.5rem;
-      background: #4f46e5;
-      color: white;
-      border-radius: 8px;
-      text-decoration: none;
-      font-weight: 500;
-      transition: background 0.15s;
+      display: inline-block; padding: 0.625rem 1.5rem;
+      background: #4f46e5; color: white; border-radius: 8px;
+      text-decoration: none; font-weight: 500; transition: background 0.15s;
     }
     a:hover { background: #4338ca; }
   </style>
@@ -95,6 +125,8 @@ function notFoundPage() {
 </body>
 </html>`;
 }
+
+// ── Startup ───────────────────────────────────────────────────────────────────
 
 async function start() {
   let retries = 12;
@@ -113,7 +145,7 @@ async function start() {
     process.exit(1);
   }
 
-  app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+  server.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
 }
 
 start();

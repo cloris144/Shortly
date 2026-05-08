@@ -76,7 +76,7 @@ function ClickRow({ click, index }) {
   );
 }
 
-export default function ClickDrawer({ link, onClose }) {
+export default function ClickDrawer({ link, lastWsMsg, onClose }) {
   const [clicks, setClicks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -87,6 +87,25 @@ export default function ClickDrawer({ link, onClose }) {
       .catch(() => setError('Failed to load click history.'))
       .finally(() => setLoading(false));
   }, [link.id]);
+
+  // Prepend new click entry as it arrives live
+  useEffect(() => {
+    if (!lastWsMsg) return;
+    if (lastWsMsg.type === 'click:logged' && lastWsMsg.data.linkId === link.id) {
+      const entry = {
+        id: Date.now(), // temporary id until next full fetch
+        ip: lastWsMsg.data.ip,
+        browser: lastWsMsg.data.browser,
+        browserVersion: lastWsMsg.data.browserVersion,
+        os: lastWsMsg.data.os,
+        deviceType: lastWsMsg.data.deviceType,
+        referer: lastWsMsg.data.referer,
+        userAgent: lastWsMsg.data.userAgent,
+        clickedAt: lastWsMsg.data.clickedAt,
+      };
+      setClicks(prev => [entry, ...prev]);
+    }
+  }, [lastWsMsg, link.id]);
 
   return (
     <motion.div

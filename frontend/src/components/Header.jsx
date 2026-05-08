@@ -32,7 +32,9 @@ const MODES = [
   { key: 'dark',   Icon: MoonIcon,   label: 'Dark'   },
 ];
 
-export default function Header({ mode, setMode }) {
+const WS_LABELS = { connected: 'Live', connecting: 'Connecting…', disconnected: 'Offline' };
+
+export default function Header({ mode, setMode, wsStatus }) {
   return (
     <motion.header
       className="header"
@@ -49,6 +51,10 @@ export default function Header({ mode, setMode }) {
         </div>
         <span className="header-title">Shortly</span>
         <span className="header-subtitle">Create, manage, and track simple short links.</span>
+        <span className={`ws-badge ws-badge--${wsStatus}`} title={`WebSocket: ${wsStatus}`}>
+          <span className="ws-dot" />
+          {WS_LABELS[wsStatus]}
+        </span>
 
         <div className="theme-toggle" role="group" aria-label="Color theme">
           {MODES.map(({ key, Icon, label }) => (

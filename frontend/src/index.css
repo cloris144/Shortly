@@ -882,6 +882,52 @@ body {
   .stats-grid { grid-template-columns: repeat(3, 1fr); }
 }
 
+/* ── WebSocket Status Badge ── */
+
+.ws-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 99px;
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  white-space: nowrap;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.ws-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+.ws-badge--connected { color: var(--success); border-color: var(--success-light); }
+.ws-badge--connected .ws-dot { background: var(--success); }
+
+.ws-badge--connecting { color: #d97706; border-color: #fde68a; }
+.ws-badge--connecting .ws-dot {
+  background: #d97706;
+  animation: ws-pulse 1s ease-in-out infinite;
+}
+
+.ws-badge--disconnected { color: var(--danger); border-color: var(--danger-light); }
+.ws-badge--disconnected .ws-dot { background: var(--danger); }
+
+@keyframes ws-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (max-width: 640px) {
+  .ws-badge { display: none; }
+}
+
 /* ── Theme Toggle ── */
 
 .theme-toggle {
