@@ -13,7 +13,16 @@ const PORT = process.env.PORT || 4000;
 
 // ── WebSocket server ──────────────────────────────────────────────────────────
 
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (req, socket, head) => {
+  const { pathname } = new URL(req.url, `http://${req.headers.host}`);
+  if (pathname === '/ws') {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  } else {
+    socket.destroy();
+  }
+});
 
 function broadcast(data) {
   const message = JSON.stringify(data);
@@ -38,7 +47,7 @@ app.use('/api/links', createLinksRouter(broadcast));
 
 app.get('/:shortCode', async (req, res) => {
   const { shortCode } = req.params;
-  if (shortCode === 'favicon.ico') return res.status(404).end();
+  if (shortCode === 'favicon.ico' || shortCode === 'ws') return res.status(404).end();
 
   try {
     const result = await pool.query(
