@@ -11,6 +11,11 @@ import ClickDrawer from './components/ClickDrawer';
 import Toast from './components/Toast';
 import { fetchLinks, createLink, updateLink, deleteLink } from './api';
 
+function normalizeUrl(url) {
+  const trimmed = url.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
 export default function App() {
   const [links, setLinks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -21,6 +26,8 @@ export default function App() {
   const [lastWsMsg, setLastWsMsg] = useState(null);
   const { mode, setMode } = useTheme();
   const toastId = useRef(0);
+  const wsStatusRef = useRef('connecting');
+  const linksRef = useRef([]);
 
   const addToast = useCallback((message, type = 'success') => {
     const id = ++toastId.current;
@@ -28,53 +35,79 @@ export default function App() {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3500);
   }, []);
 
+  // Keep linksRef in sync so WS handler can read current links without a dep
+  const setLinksAndRef = useCallback((updater) => {
+    setLinks(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      linksRef.current = next;
+      return next;
+    });
+  }, []);
+
   // Load initial data
   useEffect(() => {
     fetchLinks()
-      .then(setLinks)
+      .then(data => setLinksAndRef(data))
       .catch(() => addToast('Failed to load links. Please refresh.', 'error'))
       .finally(() => setLoading(false));
-  }, [addToast]);
+  }, [addToast, setLinksAndRef]);
 
   // WebSocket live sync
   const wsStatus = useWebSocket(useCallback((msg) => {
     setLastWsMsg(msg);
     switch (msg.type) {
       case 'link:created':
-        // Deduplicate: our own create already updated state via API response
-        setLinks(prev => prev.some(l => l.id === msg.data.id) ? prev : [msg.data, ...prev]);
+        // WS is single source of truth for creates when connected.
+        // handleCreate skips setLinks when WS is connected, so no duplicate.
+        // Dedup guard covers the edge case where both paths race.
+        setLinksAndRef(prev => prev.some(l => l.id === msg.data.id) ? prev : [msg.data, ...prev]);
         break;
       case 'link:updated':
-        setLinks(prev => prev.map(l => l.id === msg.data.id ? msg.data : l));
+        setLinksAndRef(prev => prev.map(l => l.id === msg.data.id ? msg.data : l));
         break;
       case 'link:deleted':
-        setLinks(prev => prev.filter(l => l.id !== msg.data.id));
-        // Close drawer if deleted link was open
+        setLinksAndRef(prev => prev.filter(l => l.id !== msg.data.id));
         setClickTarget(prev => prev?.id === msg.data.id ? null : prev);
         break;
       case 'link:clicked':
-        setLinks(prev => prev.map(l =>
+        setLinksAndRef(prev => prev.map(l =>
           l.id === msg.data.id
             ? { ...l, clickCount: msg.data.clickCount, updatedAt: msg.data.updatedAt }
             : l
         ));
         break;
     }
-  }, []));
+  }, [setLinksAndRef]));
+
+  // Keep wsStatusRef current so handleCreate can read it without closure issues
+  useEffect(() => { wsStatusRef.current = wsStatus; }, [wsStatus]);
 
   // ── CRUD handlers ───────────────────────────────────────────────────────────
 
   const handleCreate = async (originalUrl) => {
+    const normalized = normalizeUrl(originalUrl);
+
+    // Reject duplicate original URLs
+    if (linksRef.current.some(l => l.originalUrl === normalized)) {
+      throw Object.assign(new Error('A short link for this URL already exists.'), { code: 'DUPLICATE_URL' });
+    }
+
     const newLink = await createLink(originalUrl);
-    setLinks(prev => [newLink, ...prev]);
     setNewLinkId(newLink.id);
     setTimeout(() => setNewLinkId(null), 3000);
     addToast('Short URL created successfully!', 'success');
+
+    // Only update list directly if WS is offline — otherwise the link:created
+    // event is the single source of truth and will arrive momentarily.
+    if (wsStatusRef.current !== 'connected') {
+      setLinksAndRef(prev => prev.some(l => l.id === newLink.id) ? prev : [newLink, ...prev]);
+    }
   };
 
   const handleUpdate = async (id, originalUrl) => {
     const updated = await updateLink(id, originalUrl);
-    setLinks(prev => prev.map(l => l.id === id ? updated : l));
+    // WS event will sync other clients; update locally for instant feedback
+    setLinksAndRef(prev => prev.map(l => l.id === id ? updated : l));
     addToast('Link updated.', 'success');
     return updated;
   };
@@ -85,7 +118,7 @@ export default function App() {
     setDeleteTarget(null);
     try {
       await deleteLink(target.id);
-      setLinks(prev => prev.filter(l => l.id !== target.id));
+      setLinksAndRef(prev => prev.filter(l => l.id !== target.id));
       addToast('Link deleted.', 'success');
     } catch {
       addToast('Could not delete the link.', 'error');
