@@ -1,6 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import LinkCard from './LinkCard';
+
+const PAGE_SIZE = 10;
 
 const cardVariants = {
   initial: { opacity: 0, y: -16, scale: 0.97 },
@@ -27,6 +29,59 @@ function applySort(links, sortBy) {
   }
 }
 
+function getPageNumbers(current, total) {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  if (current <= 4) return [1, 2, 3, 4, 5, '…', total];
+  if (current >= total - 3) return [1, '…', total - 4, total - 3, total - 2, total - 1, total];
+  return [1, '…', current - 1, current, current + 1, '…', total];
+}
+
+function Pagination({ page, totalPages, onChange }) {
+  if (totalPages <= 1) return null;
+  const pages = getPageNumbers(page, totalPages);
+  return (
+    <div className="pagination">
+      <button
+        className="pg-btn pg-arrow"
+        onClick={() => onChange(page - 1)}
+        disabled={page === 1}
+        aria-label="Previous page"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="15 18 9 12 15 6"/>
+        </svg>
+      </button>
+
+      {pages.map((p, i) =>
+        p === '…' ? (
+          <span key={`ellipsis-${i}`} className="pg-ellipsis">…</span>
+        ) : (
+          <button
+            key={p}
+            className={`pg-btn${p === page ? ' pg-btn--active' : ''}`}
+            onClick={() => onChange(p)}
+            aria-label={`Page ${p}`}
+            aria-current={p === page ? 'page' : undefined}
+          >
+            {p}
+          </button>
+        )
+      )}
+
+      <button
+        className="pg-btn pg-arrow"
+        onClick={() => onChange(page + 1)}
+        disabled={page === totalPages}
+        aria-label="Next page"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 function SkeletonCard() {
   return (
     <div className="skeleton-card">
@@ -42,6 +97,7 @@ function SkeletonCard() {
 export default function LinkList({ links, loading, onUpdate, onDelete, onCopy, onViewClicks, newLinkId }) {
   const [filter, setFilter] = useState('');
   const [sortBy, setSortBy] = useState('newest');
+  const [page, setPage] = useState(1);
 
   const displayed = useMemo(() => {
     let result = links;
@@ -54,6 +110,18 @@ export default function LinkList({ links, loading, onUpdate, onDelete, onCopy, o
     }
     return applySort(result, sortBy);
   }, [links, filter, sortBy]);
+
+  const totalPages = Math.ceil(displayed.length / PAGE_SIZE);
+  const safePage = Math.min(page, Math.max(totalPages, 1));
+  const pageSlice = displayed.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  // Reset to page 1 when filter or sort changes
+  useEffect(() => { setPage(1); }, [filter, sortBy]);
+
+  // If a live update shrinks totalPages, snap back
+  useEffect(() => {
+    if (page > totalPages && totalPages > 0) setPage(totalPages);
+  }, [totalPages, page]);
 
   if (loading) {
     return (
@@ -170,7 +238,7 @@ export default function LinkList({ links, loading, onUpdate, onDelete, onCopy, o
               </div>
 
               <AnimatePresence mode="popLayout">
-                {displayed.map((link) => (
+                {pageSlice.map((link) => (
                   <motion.div
                     key={link.id}
                     layout
@@ -190,6 +258,12 @@ export default function LinkList({ links, loading, onUpdate, onDelete, onCopy, o
                   </motion.div>
                 ))}
               </AnimatePresence>
+
+              <Pagination
+                page={safePage}
+                totalPages={totalPages}
+                onChange={setPage}
+              />
             </>
           )}
         </>
