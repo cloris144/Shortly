@@ -186,6 +186,7 @@ export default function ClickDrawer({ link, lastWsMsg, onClose }) {
           {!loading && !error && clicks.length > 0 && (
             <>
               <div className="click-list-header">
+                <span>#</span>
                 <span>Device</span>
                 <span>Browser</span>
                 <span>OS</span>
