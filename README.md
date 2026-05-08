@@ -60,7 +60,7 @@ Only Nginx is exposed to the host. The frontend, backend, and database are inter
 **Requirements:** Docker and Docker Compose installed.
 
 ```bash
-git clone <repo-url> Shortly
+git clone https://github.com/cloris144/Shortly.git
 cd Shortly
 docker compose up --build
 ```
